@@ -7,6 +7,7 @@ import (
 	"github.com/SimplestCloud/jaeger-ddb-spanstore/spanstore"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/jaegertracing/jaeger/plugin/storage/grpc/shared"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -35,13 +36,16 @@ func main() {
 	awsConfig := prepareAws(ctx, awsProfile)
 
 	if create {
-		err := spanstore.EnsureTablesAreReady(ctx, awsConfig)
+		err := spanstore.EnsureTablesAreReady(ctx, dbSuffix, awsConfig)
 		if err != nil {
 			L(ctx).Fatal("Failed to create tables", zap.Error(err))
 		}
 	}
 
-	plug := spanstore.Plugin{}
+	reader := &spanstore.DdbReader{}
+	writer := spanstore.NewDdbWriter(dynamodb.NewFromConfig(awsConfig), dbSuffix)
+
+	plug := spanstore.NewPlugin(reader, writer)
 
 	L(ctx).Info("Opening listener", zap.String("listen-address", listenAddress))
 
@@ -53,7 +57,7 @@ func main() {
 	L(ctx).Info("Starting the GRPC server")
 
 	server := grpc.NewServer()
-	plugins := shared.NewGRPCHandlerWithPlugins(&plug, &plug, &plug)
+	plugins := shared.NewGRPCHandlerWithPlugins(plug, plug, plug)
 	_ = plugins.Register(server)
 
 	_ = server.Serve(listener)

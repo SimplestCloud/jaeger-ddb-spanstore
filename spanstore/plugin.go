@@ -7,37 +7,41 @@ import (
 )
 
 type Plugin struct {
+	reader *DdbReader
+	writer *DdbWriter
 }
 
 var _ shared.StreamingSpanWriterPlugin = &Plugin{}
 var _ shared.ArchiveStoragePlugin = &Plugin{}
 var _ shared.StoragePlugin = &Plugin{}
 
-func (p Plugin) StreamingSpanWriter() spanstore.Writer {
-	panic("implement me")
+func NewPlugin(reader *DdbReader, writer *DdbWriter) *Plugin {
+	return &Plugin{
+		reader: reader,
+		writer: writer,
+	}
 }
 
-func (p Plugin) ArchiveSpanReader() spanstore.Reader {
-	//TODO implement me
-	panic("implement me")
+func (p *Plugin) StreamingSpanWriter() spanstore.Writer {
+	return p.writer
 }
 
-func (p Plugin) ArchiveSpanWriter() spanstore.Writer {
-	//TODO implement me
-	panic("implement me")
+func (p *Plugin) ArchiveSpanReader() spanstore.Reader {
+	return p.reader
 }
 
-func (p Plugin) SpanReader() spanstore.Reader {
-	//TODO implement me
-	panic("implement me")
+func (p *Plugin) ArchiveSpanWriter() spanstore.Writer {
+	return p.writer
 }
 
-func (p Plugin) SpanWriter() spanstore.Writer {
-	//TODO implement me
-	panic("implement me")
+func (p *Plugin) SpanReader() spanstore.Reader {
+	return p.reader
 }
 
-func (p Plugin) DependencyReader() dependencystore.Reader {
-	//TODO implement me
-	panic("implement me")
+func (p *Plugin) SpanWriter() spanstore.Writer {
+	return p.writer
+}
+
+func (p *Plugin) DependencyReader() dependencystore.Reader {
+	return p.reader
 }

@@ -202,19 +202,28 @@ func (db *DynamoDBInitializer) ensureGsi(ctx context.Context, client *dynamodb.C
 	}
 
 	existing := map[string]bool{}
+	hasPending := false
 	for _, i := range response.Table.GlobalSecondaryIndexes {
 		existing[*i.IndexName] = true
+		if i.IndexStatus != ddbtypes.IndexStatusActive {
+			hasPending = true
+		}
 	}
 
-	var newGsis []ddbtypes.GlobalSecondaryIndexUpdate
-	var attrDefs []ddbtypes.AttributeDefinition
+	if hasPending {
+		err = db.waitForGsi(ctx, tableName, client)
+		if err != nil {
+			return err
+		}
+	}
+
 	for _, gsi := range gsis {
 		if existing[gsi.Name] {
 			L(ctx).Info("GSI exists", zap.String("gsi-name", gsi.Name))
 			continue
 		}
 
-		L(ctx).Info("GSI will be created", zap.String("gsi-name", gsi.Name))
+		var attrDefs []ddbtypes.AttributeDefinition
 		keySchemaElems := []ddbtypes.KeySchemaElement{{
 			AttributeName: aws.String(gsi.ProjectionField),
 			KeyType:       ddbtypes.KeyTypeHash,
@@ -230,39 +239,32 @@ func (db *DynamoDBInitializer) ensureGsi(ctx context.Context, client *dynamodb.C
 			attrDefs = append(attrDefs, ddbtypes.AttributeDefinition{
 				AttributeName: aws.String(gsi.RangeKeyField), AttributeType: gsi.RangeKeyType})
 		}
-		newGsis = append(newGsis, ddbtypes.GlobalSecondaryIndexUpdate{
-			Create: &ddbtypes.CreateGlobalSecondaryIndexAction{
-				IndexName: aws.String(gsi.Name),
-				KeySchema: keySchemaElems,
-				Projection: &ddbtypes.Projection{
-					ProjectionType: ddbtypes.ProjectionTypeAll,
-				},
-				ProvisionedThroughput: &ddbtypes.ProvisionedThroughput{
-					ReadCapacityUnits:  aws.Int64(0),
-					WriteCapacityUnits: aws.Int64(0),
-				},
-			},
-		})
-	}
 
-	if len(newGsis) != 0 {
-		L(ctx).Info("Creating the missing GSIs")
+		L(ctx).Info("Creating the GSI", zap.String("gsi-name", gsi.Name))
 
 		_, err := client.UpdateTable(ctx, &dynamodb.UpdateTableInput{
-			TableName:                   aws.String(tableName),
-			GlobalSecondaryIndexUpdates: newGsis,
-			AttributeDefinitions:        attrDefs,
+			TableName: aws.String(tableName),
+			GlobalSecondaryIndexUpdates: []ddbtypes.GlobalSecondaryIndexUpdate{{
+				Create: &ddbtypes.CreateGlobalSecondaryIndexAction{
+					IndexName: aws.String(gsi.Name),
+					KeySchema: keySchemaElems,
+					Projection: &ddbtypes.Projection{
+						ProjectionType: ddbtypes.ProjectionTypeAll,
+					},
+				}},
+			},
+			AttributeDefinitions: attrDefs,
 		})
 		if err != nil {
 			return err
 		}
-	}
 
-	// We wait for GSIs to become active, even if nothing new was created, on an
-	// off-chance we were restarted during waiting.
-	err = db.waitForGsi(ctx, tableName, client)
-	if err != nil {
-		return err
+		// We wait for GSIs to become active, even if nothing new was created, on an
+		// off-chance we were restarted during waiting.
+		err = db.waitForGsi(ctx, tableName, client)
+		if err != nil {
+			return err
+		}
 	}
 
 	L(ctx).Info("GSI are ready", zap.String("table-name", tableName))
@@ -271,6 +273,8 @@ func (db *DynamoDBInitializer) ensureGsi(ctx context.Context, client *dynamodb.C
 
 func (db *DynamoDBInitializer) waitForGsi(ctx context.Context, tableName string,
 	client *dynamodb.Client) error {
+
+	L(ctx).Info("Waiting for the GSIs to become ready")
 
 	indexesAreReady := func(ctx context.Context, input *dynamodb.DescribeTableInput,
 		output *dynamodb.DescribeTableOutput, err error) (bool, error) {
@@ -296,10 +300,11 @@ func (db *DynamoDBInitializer) waitForGsi(ctx context.Context, tableName string,
 	})
 
 	params := &dynamodb.DescribeTableInput{TableName: aws.String(tableName)}
-	err := waiter.Wait(ctx, params, 5*time.Minute)
+	err := waiter.Wait(ctx, params, 15*time.Minute)
 	if err != nil {
 		return err
 	}
 
+	L(ctx).Info("GSIs are all active")
 	return nil
 }
