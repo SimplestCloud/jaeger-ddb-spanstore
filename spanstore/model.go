@@ -13,12 +13,13 @@ import (
 )
 
 const SpanTableName = "span"
+const ServiceTableName = "service"
 
 var ddbTables = []schemer.Table{
 	{
 		Name:         SpanTableName,
 		HashKeyName:  "service_and_time",
-		RangeKeyName: "span_id",
+		RangeKeyName: "segment_id",
 		RangeKeyType: types.ScalarAttributeTypeS,
 		TtlFieldName: "ttl",
 		GSIs: []schemer.GSI{
@@ -34,19 +35,25 @@ var ddbTables = []schemer.Table{
 				RangeKeyField:   "duration_nanos",
 				RangeKeyType:    types.ScalarAttributeTypeN,
 			},
+			{
+				Name:            "by-trace-id",
+				ProjectionField: "trace_id",
+				RangeKeyField:   "span_id",
+				RangeKeyType:    types.ScalarAttributeTypeS,
+			},
 		},
 	},
 	{
-		Name:         "service",
-		HashKeyName:  "name",
+		Name:         ServiceTableName,
+		HashKeyName:  "service",
 		RangeKeyName: "operation",
 		RangeKeyType: types.ScalarAttributeTypeS,
 		TtlFieldName: "ttl",
 	},
 	{
 		Name:         "dependency",
-		HashKeyName:  "parent_service",
-		RangeKeyName: "child_service",
+		HashKeyName:  "time_bucket",
+		RangeKeyName: "dependency",
 		RangeKeyType: types.ScalarAttributeTypeS,
 		TtlFieldName: "ttl",
 	},
@@ -62,6 +69,11 @@ func EnsureTablesAreReady(ctx context.Context, suffix string, config aws.Config)
 	}
 	L(ctx).Info("Tables are ready")
 	return nil
+}
+
+type StoredService struct {
+	Service   string `dynamodbav:"service,omitempty"`
+	Operation string `dynamodbav:"operation,omitempty"`
 }
 
 // StoredSpanRef the stored version of model.SpanRef
@@ -97,8 +109,11 @@ type StoredProcess struct {
 // StoredSpan the stored version of model.Span
 type StoredSpan struct {
 	// The bucket key
-	ServiceAndTime string            `dynamodbav:"service_and_time,omitempty"`
-	FlattenedTags  map[string]string `dynamodbav:"flattened_tags,omitempty"`
+	ServiceAndTime string `dynamodbav:"service_and_time,omitempty"`
+	// The combination of the TraceID and SpanID
+	SegmentId string `dynamodbav:"segment_id,omitempty"`
+	// Tags for searching
+	FlattenedTags map[string]string `dynamodbav:"flattened_tags,omitempty"`
 
 	TraceId       string           `dynamodbav:"trace_id,omitempty"`
 	SpanId        string           `dynamodbav:"span_id,omitempty"`
@@ -117,12 +132,8 @@ type StoredSpan struct {
 func ToDdbModel(span *model.Span) (*StoredSpan, error) {
 	res := &StoredSpan{}
 
-	// We bucket by every hour to ensure sharing
-	timeBucket := span.StartTime.UTC().Format("2006-01-02-15")
-	res.ServiceAndTime = res.Process.ServiceName + "-" + timeBucket
-
 	res.TraceId = formatTraceId(span.TraceID)
-	res.SpanId = fmt.Sprintf("%x", span.SpanID)
+	res.SpanId = formatSpanId(span.SpanID)
 	res.OperationName = span.OperationName
 	res.References = translateReferences(span.References)
 	res.Flags = span.Flags
@@ -134,11 +145,20 @@ func ToDdbModel(span *model.Span) (*StoredSpan, error) {
 	res.ProcessId = span.ProcessID
 	res.Warnings = span.Warnings
 
+	// We bucket by every hour to ensure sharing
+	timeBucket := span.StartTime.UTC().Format("2006-01-02-15")
+	res.ServiceAndTime = span.Process.ServiceName + "-" + timeBucket
+	res.SegmentId = res.TraceId + "-" + res.SpanId
+
 	res.FlattenedTags = map[string]string{}
 	flattenTags(span.Tags, res.FlattenedTags)
 	flattenTags(span.Process.Tags, res.FlattenedTags)
 
 	return res, nil
+}
+
+func formatSpanId(sid model.SpanID) string {
+	return fmt.Sprintf("%x", uint64(sid))
 }
 
 func formatTraceId(tid model.TraceID) string {

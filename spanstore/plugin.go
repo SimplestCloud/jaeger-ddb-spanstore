@@ -7,18 +7,20 @@ import (
 )
 
 type Plugin struct {
-	reader *DdbReader
-	writer *DdbWriter
+	reader        *DdbReader
+	writer        *DdbWriter
+	archiveWriter *DdbWriter
 }
 
 var _ shared.StreamingSpanWriterPlugin = &Plugin{}
 var _ shared.ArchiveStoragePlugin = &Plugin{}
 var _ shared.StoragePlugin = &Plugin{}
 
-func NewPlugin(reader *DdbReader, writer *DdbWriter) *Plugin {
+func NewPlugin(reader *DdbReader, writer, archiveWriter *DdbWriter) *Plugin {
 	return &Plugin{
-		reader: reader,
-		writer: writer,
+		reader:        reader,
+		writer:        writer,
+		archiveWriter: archiveWriter,
 	}
 }
 
@@ -31,7 +33,7 @@ func (p *Plugin) ArchiveSpanReader() spanstore.Reader {
 }
 
 func (p *Plugin) ArchiveSpanWriter() spanstore.Writer {
-	return p.writer
+	return p.archiveWriter
 }
 
 func (p *Plugin) SpanReader() spanstore.Reader {
